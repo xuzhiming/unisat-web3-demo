@@ -1,8 +1,23 @@
 import React, { useEffect, useRef, useState } from "react";
 import "./App.css";
 import { Button, Card, Input, Radio } from "antd";
+import * as bitcoin from "bitcoinjs-lib";
+import * as MSign from "msigner";
 
-function App() {
+class ItemProviderCheck implements MSign.ItemProvider {
+  getTokenByOutput(output: string): Promise<MSign.IOrdItem | null> {
+    // throw new Error("Method not implemented.");
+    const result = null;
+    return result!;
+  }
+  getTokenById(tokenId: string): Promise<MSign.IOrdItem | null> {
+    // throw new Error("Method not implemented.");
+    const result = null;
+    return result!;
+  }
+}
+
+function App(): JSX.Element {
   const [unisatInstalled, setUnisatInstalled] = useState(false);
   const [connected, setConnected] = useState(false);
   const [accounts, setAccounts] = useState<string[]>([]);
@@ -14,6 +29,13 @@ function App() {
     total: 0,
   });
   const [network, setNetwork] = useState("livenet");
+  const [testList, setTestList] = useState<MSign.IListingState>();
+  const [testBuyerList, setTestBuyerList] = useState<MSign.IListingState>();
+  const [prepareDummyResult, setprepareDummyResult] = useState("");
+  const [payResult, setPayResult] = useState("");
+
+  // const [itemCheck, setItemCheck] = useState<MSign.ItemProvider>();
+  var itemCheck = new ItemProviderCheck();
 
   const getBasicInfo = async () => {
     const unisat = (window as any).unisat;
@@ -28,6 +50,131 @@ function App() {
 
     const network = await unisat.getNetwork();
     setNetwork(network);
+  };
+
+  const listInscription = async (inscription: any) => {
+    setTestList({
+      seller: {
+        makerFeeBp: 0,
+        sellerOrdAddress: address,
+        price: 1500,
+        ordItem: mapInscription2OrdItem(inscription),
+        sellerReceiveAddress: address,
+        signedListingPSBTBase64: "",
+        // tapInternalKey: publicKey,
+      },
+    });
+
+    const info = await MSign.SellerSigner.generateUnsignedListingPSBTBase64(
+      testList!
+    );
+
+    const psbt = bitcoin.Psbt.fromBase64(
+      info.seller.unsignedListingPSBTBase64!
+    );
+    const psbtResult = await unisat.signPsbt(psbt.toHex(), {
+      autoFinalized: false,
+    });
+
+    info.seller.signedListingPSBTBase64 =
+      bitcoin.Psbt.fromHex(psbtResult).toBase64();
+    setTestList(info);
+  };
+
+  const prepareBuyerDummyUtxo = async () => {
+    setprepareDummyResult("");
+    const addressUtxos = await MSign.getAddressUtxos(address);
+
+    const hasValidDummys = await MSign.BuyerSigner.checkDummyUtxos(
+      addressUtxos,
+      itemCheck
+    );
+    if (hasValidDummys) {
+      setprepareDummyResult("already have dummy utxos");
+      return;
+    }
+
+    const dummyPsbt =
+      await MSign.BuyerSigner.generateUnsignedCreateDummyUtxoPSBTBase64(
+        address,
+        publicKey,
+        addressUtxos,
+        "fastestFee",
+        itemCheck!
+      );
+
+    const psbt = bitcoin.Psbt.fromBase64(dummyPsbt);
+
+    try {
+      const psbtResult = await unisat.signPsbt(psbt.toHex(), {
+        autoFinalized: true,
+      });
+      const result = await unisat.pushPsbt(psbtResult);
+      setprepareDummyResult(result + ":" + psbtResult);
+
+      // console.log(result);
+    } catch (e) {
+      setprepareDummyResult((e as any).message);
+      // console.log(e);
+    }
+  };
+
+  const buyInscription = async () => {
+    const addressUtxos = await MSign.getAddressUtxos(address);
+    setPayResult("");
+    setTestList({
+      seller: testList?.seller!,
+      buyer: {
+        takerFeeBp: 0,
+        buyerAddress: address,
+        buyerTokenReceiveAddress: address,
+        buyerPublicKey: publicKey,
+        feeRateTier: "fastestFee",
+        buyerDummyUTXOs: (await MSign.BuyerSigner.selectDummyUTXOs(
+          addressUtxos,
+          itemCheck
+        ))!,
+        buyerPaymentUTXOs: (await MSign.BuyerSigner.selectPaymentUTXOs(
+          addressUtxos,
+          testList?.seller.price!,
+          0,
+          0,
+          "",
+          itemCheck
+        ))!,
+        unsignedBuyingPSBTBase64: "",
+        signedBuyingPSBTBase64: "",
+        mergedSignedBuyingPSBTBase64: "",
+      },
+    });
+
+    const info = await MSign.BuyerSigner.generateUnsignedBuyingPSBTBase64(
+      testList!
+    );
+
+    const buyPsbt = info?.buyer?.unsignedBuyingPSBTBase64;
+    const psbt = bitcoin.Psbt.fromBase64(buyPsbt!);
+    try {
+      const psbtResult = await unisat.signPsbt(psbt.toHex(), {
+        autoFinalized: false,
+      });
+      const signedPsbt = bitcoin.Psbt.fromHex(psbtResult);
+
+      info.buyer!.signedBuyingPSBTBase64 = signedPsbt.toBase64();
+      setTestList(info);
+
+      const mergedPsbtB64 = MSign.BuyerSigner.mergeSignedBuyingPSBTBase64(
+        info.seller.signedListingPSBTBase64!,
+        info.buyer?.signedBuyingPSBTBase64!
+      );
+      const psbtFinal = bitcoin.Psbt.fromBase64(mergedPsbtB64);
+      psbtFinal.finalizeAllInputs();
+
+      const presult = await unisat.pushPsbt(psbtFinal.toHex());
+      setPayResult(presult + ":" + psbtFinal.toHex());
+    } catch (e) {
+      setPayResult((e as any).message);
+    }
   };
 
   const selfRef = useRef<{ accounts: string[] }>({
@@ -57,31 +204,49 @@ function App() {
     getBasicInfo();
   };
 
-  useEffect(() => {
+  const mapInscription2OrdItem = (inscription: any) => {
+    return {
+      id: inscription.inscriptionId,
+      contentURI: inscription.content,
+      contentType: inscription.contentType,
+      contentPreviewURI: inscription.preview,
+      sat: inscription.inscriptionNumber,
+      satName: "",
+      genesisTransaction: inscription.genesisTransaction,
+      inscriptionNumber: inscription.inscriptionNumber,
+      chain: "",
+      owner: "",
 
+      location: inscription.location,
+      outputValue: inscription.outputValue,
+      output: inscription.output,
+      listed: false,
+    };
+  };
+
+  useEffect(() => {
     async function checkUnisat() {
       let unisat = (window as any).unisat;
 
       for (let i = 1; i < 10 && !unisat; i += 1) {
-          await new Promise((resolve) => setTimeout(resolve, 100*i));
-          unisat = (window as any).unisat;
+        await new Promise((resolve) => setTimeout(resolve, 100 * i));
+        unisat = (window as any).unisat;
       }
 
-      if(unisat){
-          setUnisatInstalled(true);
-      }else if (!unisat)
-          return;
+      if (unisat) {
+        setUnisatInstalled(true);
+      } else if (!unisat) return;
 
       unisat.getAccounts().then((accounts: string[]) => {
-          handleAccountsChanged(accounts);
+        handleAccountsChanged(accounts);
       });
 
       unisat.on("accountsChanged", handleAccountsChanged);
       unisat.on("networkChanged", handleNetworkChanged);
 
       return () => {
-          unisat.removeListener("accountsChanged", handleAccountsChanged);
-          unisat.removeListener("networkChanged", handleNetworkChanged);
+        unisat.removeListener("accountsChanged", handleAccountsChanged);
+        unisat.removeListener("networkChanged", handleNetworkChanged);
       };
     }
 
@@ -139,7 +304,6 @@ function App() {
                 <div style={{ wordWrap: "break-word" }}>{balance.total}</div>
               </div>
             </Card>
-
             <Card
               size="small"
               title="Switch Network"
@@ -159,12 +323,82 @@ function App() {
                 </Radio.Group>
               </div>
             </Card>
+            <LastInscription></LastInscription>
+            <Card
+              size="small"
+              title="Sell First Inscription"
+              style={{ width: 300, margin: 10 }}
+            >
+              <div>
+                <Button
+                  onClick={async () => {
+                    const result = await (
+                      window as any
+                    ).unisat.getInscriptions();
+                    listInscription(result.list[0]);
+                  }}
+                >
+                  Fetch And Sell First Inscription
+                </Button>
+              </div>
+              <div style={{ textAlign: "left", marginTop: 10 }}>
+                <div style={{ fontWeight: "bold" }}>Result:</div>
+                <div style={{ wordWrap: "break-word" }}>
+                  {testList?.seller.signedListingPSBTBase64}
+                </div>
+              </div>
+            </Card>
 
+            <Card
+              size="small"
+              title="Buyer prepare dummy utxos"
+              style={{ width: 300, margin: 10 }}
+            >
+              <div>
+                <Button
+                  onClick={async () => {
+                    const result = await prepareBuyerDummyUtxo();
+                  }}
+                >
+                  Buyer Prepare Dummy utxos
+                </Button>
+              </div>
+              <div style={{ textAlign: "left", marginTop: 10 }}>
+                <div style={{ fontWeight: "bold" }}>Result:</div>
+                <div style={{ wordWrap: "break-word" }}>
+                  {prepareDummyResult}
+                </div>
+              </div>
+            </Card>
+
+            <Card
+              size="small"
+              title="Buyer pay"
+              style={{ width: 300, margin: 10 }}
+            >
+              <div>
+                <Button
+                  onClick={async () => {
+                    const result = await buyInscription();
+                  }}
+                >
+                  Buyer Pay
+                </Button>
+              </div>
+              <div style={{ textAlign: "left", marginTop: 10 }}>
+                <div style={{ fontWeight: "bold" }}>Result:</div>
+                <div style={{ wordWrap: "break-word" }}>{payResult}</div>
+              </div>
+            </Card>
+
+            <CreatePsbt></CreatePsbt>
             <SignPsbtCard />
             <SignMessageCard />
             <PushTxCard />
             <PushPsbtCard />
             <SendBitcoin />
+            <SendInscription></SendInscription>
+            <TakerPsbtCard></TakerPsbtCard>
           </div>
         ) : (
           <div>
@@ -180,6 +414,199 @@ function App() {
         )}
       </header>
     </div>
+  );
+}
+
+function LastInscription() {
+  const [inscription, setInscription] = useState([]);
+  return (
+    <Card
+      size="small"
+      title="Get Inscriptions"
+      style={{ width: 300, margin: 10 }}
+    >
+      <div>
+        <Button
+          onClick={async () => {
+            const result = await (window as any).unisat.getInscriptions();
+            setInscription(result.list);
+          }}
+        >
+          Fetch Inscriptions
+        </Button>
+      </div>
+      <div style={{ textAlign: "left", marginTop: 10 }}>
+        <div style={{ fontWeight: "bold" }}>Result:</div>
+        <div style={{ wordWrap: "break-word" }}>
+          {JSON.stringify(inscription)}
+        </div>
+      </div>
+    </Card>
+  );
+}
+function toPsbtNetwork(networkType: number) {
+  if (networkType === 0) {
+    return bitcoin.networks.bitcoin;
+  } else {
+    return bitcoin.networks.testnet;
+  }
+}
+function toXOnly(pubKey: Buffer) {
+  if (pubKey.length === 32) {
+    return pubKey;
+  } else {
+    return pubKey.slice(1, 33);
+  }
+}
+// const toXOnly = (pubKey: Buffer) =>
+
+function CreatePsbt() {
+  const [psbtHex, setPsbtHex] = useState("");
+  const [outputValue, setOutputValue] = useState("");
+  const [myAddress, setAddressValue] = useState(
+    // "tb1q6pvg86rll8qne8yw06p0yepv4yc0982ahmrn6e"
+    "tb1pjeazdn20fk7e2df65xjvput7n58dfzmewmfxjgvjx450f5enwnrsn9vplj"
+  );
+  const [txid, setTxid] = useState(
+    "b8a6510ecaa73cb45523eb6043aacd44a0fc7b93dce90860054137a1f717eea1"
+  );
+  let btcNetwork = toPsbtNetwork(1);
+
+  return (
+    <Card size="small" title="Create Psbt" style={{ width: 300, margin: 10 }}>
+      <div style={{ textAlign: "left", marginTop: 10 }}>
+        <div style={{ fontWeight: "bold" }}>InputTxid:</div>
+        <Input
+          defaultValue={txid}
+          onChange={(e) => {
+            setTxid(e.target.value);
+          }}
+        ></Input>
+      </div>
+
+      <div style={{ textAlign: "left", marginTop: 10 }}>
+        <div style={{ fontWeight: "bold" }}>address:</div>
+        <Input
+          defaultValue={myAddress}
+          onChange={(e) => {
+            setAddressValue(e.target.value);
+          }}
+        ></Input>
+      </div>
+
+      <div style={{ textAlign: "left", marginTop: 10 }}>
+        <div style={{ fontWeight: "bold" }}>outputValue:</div>
+        <Input
+          defaultValue={outputValue}
+          onChange={(e) => {
+            setOutputValue(e.target.value);
+          }}
+        ></Input>
+      </div>
+
+      <div style={{ textAlign: "left", marginTop: 10 }}>
+        <div style={{ fontWeight: "bold" }}>Result:</div>
+        <div style={{ wordWrap: "break-word" }}>{psbtHex}</div>
+      </div>
+      <Button
+        style={{ marginTop: 10 }}
+        onClick={async () => {
+          try {
+            //create psbt
+            const psbt = new bitcoin.Psbt({ network: btcNetwork });
+
+            const publicKey = await (window as any).unisat.getPublicKey();
+            const ob = Buffer.from(publicKey, "hex");
+            let xPubKey = toXOnly(ob);
+            // let trkey = bitcoin.payments.p2tr({
+            //   pubkey: toXOnly(ob),
+            //   network: bitcoin.networks.testnet,
+            // });
+            let trkey = bitcoin.payments.p2wpkh({
+              pubkey: ob,
+              network: bitcoin.networks.testnet,
+            });
+
+            // let scriptPubKey;
+            // try {
+            //   // scriptPubKey = bitcoin.address.fromBech32(myAddress).data;
+            // } catch (e) {
+            //   console.log(e);
+            //   console.log("Invalid address: " + myAddress);
+            //   // throw new Error("Couldn't convert address");
+            // }
+
+            // psbt.addInput({
+            //   hash: "e1a3207e25e4ab1615505ef55e2648c4a9511ea28ddb315702011a9dada6f30f",
+            //   index: 0,
+            //   witnessUtxo: {
+            //     script: trkey.output!,
+            //     value: 10000,
+            //   },
+            //   sighashType:
+            //     bitcoin.Transaction.SIGHASH_SINGLE |
+            //     bitcoin.Transaction.SIGHASH_ANYONECANPAY,
+            // });
+            // const tx = bitcoin.Transaction.fromHex("02000000000102967ce8ccd1d0b2c9f5b719e5dd42b9f8cc349fd98871c73685483054ade5df7f0100000000ffffffff64e2ba1aaa2d025af542d6cadc2562ce79dc8965763a77163cd932fb8b2c674a0100000000ffffffff03a00f0000000000001600148adc45ea3eca5283972ad18d2d31596993cbec00b80b000000000000160014d05883e87ff9c13c9c8e7e82f2642ca930f29d5d160a000000000000160014d05883e87ff9c13c9c8e7e82f2642ca930f29d5d02483045022100e46b73cf09f073dcbac7aefbde0fb2183adcf3d96ea44817277cf407a74f6d9502200934d20187555bf23d60a6dfae10883c536034d21b6e47d07457eb999c3d7364832103c75bdeda1a9596b01a883c24e40e401a1dec6c55b1f481d032f02e35c3d32f5602483045022100c7934a5efef5b264422b5a9296422e16f940c9775d85001aeede2b4bdb19a1730220017e7a240a5c486023f913793e595577c362fb8a7eaa78e4cdb652212d0eb867012103b6d86356efc3cc914ba8aa3447351d0aa6946a927087a43d35eeb80dc3fe0b6c00000000");
+
+            // psbt.addInput({
+            //   hash: "888e78926692fae019ec1b127f1852dfd888ba5c6037d7f920cccda88b33d583",
+            //   index: 1,
+            //   witnessUtxo: {
+            //     script: Buffer.from(
+            //       "0014d05883e87ff9c13c9c8e7e82f2642ca930f29d5d",
+            //       "hex"
+            //     ),
+            //     value: 7000,
+            //   },
+            // });
+
+            psbt.addInput({
+              hash: txid,
+              index: 1,
+              witnessUtxo: {
+                script: trkey.output!,
+                value: 600,
+              },
+              // nonWitnessUtxo: tx.toBuffer(),
+              sighashType:
+                bitcoin.Transaction.SIGHASH_SINGLE |
+                bitcoin.Transaction.SIGHASH_ANYONECANPAY,
+
+              // nonWitnessUtxo: Buffer.from("0014d05883e87ff9c13c9c8e7e82f2642ca930f29d5d", "hex")
+            });
+
+            // psbt.addOutput({
+            //   address: "tb1q6pvg86rll8qne8yw06p0yepv4yc0982ahmrn6e",
+            //   value: 4000,
+            // });
+
+            psbt.addOutput({
+              address: trkey.address!,
+              value: 3000,
+            });
+
+            // setPsbtHex(psbt.toHex());
+
+            // psbt.signInput(0, null, bitcoin.Transaction.SIGHASH_SINGLE | bitcoin.Transaction.SIGHASH_ANYONECANPAY);
+            // const psbtResult = await (window as any).unisat.signPsbt(psbtHex);
+            // setPsbtHex(psbtResult);
+
+            const psbtResult = await (window as any).unisat.signPsbt(
+              psbt.toHex(),
+              {
+                autoFinalized: false,
+              }
+            );
+            setPsbtHex(psbtResult);
+          } catch (e) {
+            setPsbtHex((e as any).message);
+          }
+        }}
+      >
+        Create Psbt
+      </Button>
+    </Card>
   );
 }
 
@@ -205,8 +632,212 @@ function SignPsbtCard() {
         style={{ marginTop: 10 }}
         onClick={async () => {
           try {
-            const psbtResult = await (window as any).unisat.signPsbt(psbtHex);
+            const psbtResult = await (window as any).unisat.signPsbt(psbtHex, {
+              autoFinalized: false,
+            });
+            // const psbt = bitcoin.Psbt.fromHex(psbtResult);
+            // psbt.finalizeAllInputs();
+
             setPsbtResult(psbtResult);
+          } catch (e) {
+            setPsbtResult((e as any).message);
+          }
+        }}
+      >
+        Sign Psbt
+      </Button>
+    </Card>
+  );
+}
+
+function TakerPsbtCard() {
+  const [makerPsbtHex, setMakerPsbtHex] = useState("");
+  const [psbtResult, setPsbtResult] = useState("");
+  const [myAddress, setAddressValue] = useState(
+    "tb1p58us57q4u43rapz8zxxjqzxdhcwnugja03r6j0egy2jgw7ywm2aq7nwdhl"
+  );
+
+  return (
+    <Card
+      size="small"
+      title="Taker Sign Psbt"
+      style={{ width: 300, margin: 10 }}
+    >
+      <div style={{ textAlign: "left", marginTop: 10 }}>
+        <div style={{ fontWeight: "bold" }}>makerPsbtHex:</div>
+        <Input
+          defaultValue={makerPsbtHex}
+          onChange={(e) => {
+            setMakerPsbtHex(e.target.value);
+          }}
+        ></Input>
+      </div>
+
+      <div style={{ textAlign: "left", marginTop: 10 }}>
+        <div style={{ fontWeight: "bold" }}>address:</div>
+        <Input
+          defaultValue={myAddress}
+          onChange={(e) => {
+            setAddressValue(e.target.value);
+          }}
+        ></Input>
+      </div>
+
+      <div style={{ textAlign: "left", marginTop: 10 }}>
+        <div style={{ fontWeight: "bold" }}>Result:</div>
+        <div style={{ wordWrap: "break-word" }}>{psbtResult}</div>
+      </div>
+      <Button
+        style={{ marginTop: 10 }}
+        onClick={async () => {
+          let scriptPubKey;
+          // let btcNetwork = toPsbtNetwork(1);
+          // const p2sh = bitcoin.payments.p2sh({
+          //   redeem: bitcoin.payments.p2wpkh({ pubkey: publicKey, network:  }),
+          // })
+
+          const publicKey = await (window as any).unisat.getPublicKey();
+          const ob = Buffer.from(publicKey, "hex");
+          let xPubKey = toXOnly(ob);
+
+          let pkh = bitcoin.payments.p2wpkh({
+            pubkey: ob,
+            network: bitcoin.networks.testnet,
+          });
+
+          // try {
+          //   scriptPubKey = bitcoin.address.fromBech32(myAddress).data;
+          // } catch (e) {
+          //   console.log(e);
+          //   console.log("Invalid address: " + myAddress);
+          //   throw new Error("Couldn't convert address");
+          // }
+
+          try {
+            const psbtSeller = bitcoin.Psbt.fromHex(makerPsbtHex);
+
+            const psbtBuyer = new bitcoin.Psbt({
+              network: bitcoin.networks.testnet,
+            });
+
+            //buyer dummy input 1
+            psbtBuyer.addInput({
+              hash: "4da41bed33c591ff79f3f584f945a08853478a006b2813a0f66a35cfbbfddfa7",
+              index: 0,
+              witnessUtxo: {
+                script: pkh.output!,
+                value: 1000,
+              },
+            });
+
+            //buyer dummy input 2
+            psbtBuyer.addInput({
+              hash: "4da41bed33c591ff79f3f584f945a08853478a006b2813a0f66a35cfbbfddfa7",
+              index: 1,
+              witnessUtxo: {
+                script: pkh.output!,
+                value: 1000,
+              },
+            });
+
+            // seller nft Item
+            // psbtBuyer.addInputs(psbtSeller.txInputs);
+            psbtBuyer.addInput({
+              hash: "b8a6510ecaa73cb45523eb6043aacd44a0fc7b93dce90860054137a1f717eea1",
+              index: 1,
+              witnessUtxo: {
+                script: Buffer.from(
+                  "0014e78748849b1fc4f723f2f2046f56788bd162cdfe",
+                  "hex"
+                )!,
+                value: 600,
+              },
+
+              // nonWitnessUtxo: Buffer.from("0014d05883e87ff9c13c9c8e7e82f2642ca930f29d5d", "hex")
+            });
+
+            // buyer pay nft
+            psbtBuyer.addInput({
+              hash: "376e831b3ff112f2a52bc95d9f6ef16973df30d7a7044a67e92d546ef572d50a",
+              index: 3,
+              witnessUtxo: {
+                script: pkh.output!,
+                value: 4000,
+              },
+              sighashType: bitcoin.Transaction.SIGHASH_ALL,
+            });
+
+            //dummy input passthrough
+            psbtBuyer.addOutput({
+              script: pkh.output!,
+              value: 2000,
+            });
+
+            // psbtBuyer.addInput({
+            //   hash: "c4bc0cbd52b968c5653cdcbcf23e84b1d84bafb79f69c7147e5e66b86f134c81",
+            //   index: 3,
+            //   witnessUtxo: {
+            //     script: pkh.output!,
+            //     value: 3500,
+            //   },
+            //   sighashType: bitcoin.Transaction.SIGHASH_ALL,
+            // });
+
+            // psbtBuyer.addInputs(psbtSeller.txInputs);
+
+            // buyer receive nft
+            psbtBuyer.addOutput({
+              script: pkh.output!,
+              value: 600,
+            });
+
+            //seller earn
+            psbtBuyer.addOutput({
+              address: "tb1qu7r53pymrlz0wglj7gzx74nc30gk9n07lkdeg2",
+              // script: pkh.output!,
+              value: 3000,
+            });
+
+            //buyer get change
+            // psbtBuyer.addOutput({
+            //   // address: pkh.address!,
+            //   script: pkh.output!,
+            //   value: 1000,
+            // });
+            // //buyer get change
+            // psbtBuyer.addOutput({
+            //   // address: pkh.address!,
+            //   script: pkh.output!,
+            //   value: 1000,
+            // });
+
+            //buyer get change
+            psbtBuyer.addOutput({
+              // address: pkh.address!,
+              script: pkh.output!,
+              value: 4000 - 3000 - 500,
+            });
+
+            const info = psbtBuyer.toHex();
+            const psbtResult = await (window as any).unisat.signPsbt(info, {
+              autoFinalized: false,
+            });
+
+            //merge two signed psbt
+            const signedPsbt = bitcoin.Psbt.fromHex(psbtResult);
+
+            (signedPsbt.data.globalMap.unsignedTx as any).tx.ins[2] = (
+              psbtSeller.data.globalMap.unsignedTx as any
+            ).tx.ins[0];
+            signedPsbt.data.inputs[2] = psbtSeller.data.inputs[0];
+
+            signedPsbt.finalizeAllInputs();
+            const result = await (window as any).unisat.pushPsbt(
+              signedPsbt.toHex()
+            );
+            // const transactionID = signedPsbt.extractTransaction().getId();
+
+            setPsbtResult(result + ":" + signedPsbt.toHex());
           } catch (e) {
             setPsbtResult((e as any).message);
           }
@@ -323,9 +954,65 @@ function PushPsbtCard() {
   );
 }
 
+function SendInscription() {
+  const [toAddress, setToAddress] = useState(
+    "tb1p9fs8wmzalllma2vzn3swspeungjz8w5s55kwf75tva77ltpkx4aqgkrm3g"
+  );
+  const [inscriptionId, setInscriptionId] = useState("");
+  const [txid, setTxid] = useState("");
+
+  return (
+    <Card
+      size="small"
+      title="Send Inscription"
+      style={{ width: 300, margin: 10 }}
+    >
+      <div style={{ textAlign: "left", marginTop: 10 }}>
+        <div style={{ fontWeight: "bold" }}>Receiver Address:</div>
+        <Input
+          defaultValue={toAddress}
+          onChange={(e) => {
+            setToAddress(e.target.value);
+          }}
+        ></Input>
+      </div>
+
+      <div style={{ textAlign: "left", marginTop: 10 }}>
+        <div style={{ fontWeight: "bold" }}>inscriptionId</div>
+        <Input
+          defaultValue={inscriptionId}
+          onChange={(e) => {
+            setInscriptionId(e.target.value);
+          }}
+        ></Input>
+      </div>
+      <div style={{ textAlign: "left", marginTop: 10 }}>
+        <div style={{ fontWeight: "bold" }}>txid:</div>
+        <div style={{ wordWrap: "break-word" }}>{txid}</div>
+      </div>
+      <Button
+        style={{ marginTop: 10 }}
+        onClick={async () => {
+          try {
+            const txid = await (window as any).unisat.sendInscription(
+              toAddress,
+              inscriptionId
+            );
+            setTxid(txid);
+          } catch (e) {
+            setTxid((e as any).message);
+          }
+        }}
+      >
+        SendInscription
+      </Button>
+    </Card>
+  );
+}
+
 function SendBitcoin() {
   const [toAddress, setToAddress] = useState(
-    "tb1qmfla5j7cpdvmswtruldgvjvk87yrflrfsf6hh0"
+    "tb1p9fs8wmzalllma2vzn3swspeungjz8w5s55kwf75tva77ltpkx4aqgkrm3g"
   );
   const [satoshis, setSatoshis] = useState(1000);
   const [txid, setTxid] = useState("");
