@@ -3,6 +3,10 @@ import "./App.css";
 import { Button, Card, Input, Radio } from "antd";
 import * as bitcoin from "bitcoinjs-lib";
 import * as MSign from "msigner";
+// import * as ecc from "tiny-secp256k1";
+import * as ecc from "@bitcoinerlab/secp256k1";
+  
+bitcoin.initEccLib(ecc);
 
 class ItemProviderCheck implements MSign.ItemProvider {
   getTokenByOutput(output: string): Promise<MSign.IOrdItem | null> {
@@ -30,7 +34,6 @@ function App(): JSX.Element {
   });
   const [network, setNetwork] = useState("livenet");
   const [testList, setTestList] = useState<MSign.IListingState>();
-  const [testBuyerList, setTestBuyerList] = useState<MSign.IListingState>();
   const [prepareDummyResult, setprepareDummyResult] = useState("");
   const [payResult, setPayResult] = useState("");
 
