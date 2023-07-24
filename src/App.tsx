@@ -5,8 +5,15 @@ import * as bitcoin from "bitcoinjs-lib";
 import * as MSign from "msigner";
 // import * as ecc from "tiny-secp256k1";
 import * as ecc from "@bitcoinerlab/secp256k1";
+import axios from "axios";
 
 bitcoin.initEccLib(ecc);
+
+const instance = axios.create({
+  baseURL: "https://mempool.space/testnet/api/",
+  timeout: 30 * 1000,
+  // headers: {'X-Custom-Header': 'foobar'}
+});
 
 class ItemProviderCheck implements MSign.ItemProvider {
   getTokenByOutput(output: string): Promise<MSign.IOrdItem | null> {
@@ -92,6 +99,11 @@ function App(): JSX.Element {
   };
 
   const prepareBuyerDummyUtxo = async () => {
+    // let ret = await instance.get("address/" + address + "/utxo");
+
+    // setprepareDummyResult(JSON.stringify(ret.data));
+
+    // return;
     setprepareDummyResult("");
     const addressUtxos = await MSign.getAddressUtxos(address);
 
