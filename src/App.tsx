@@ -5,7 +5,7 @@ import * as bitcoin from "bitcoinjs-lib";
 import * as MSign from "msigner";
 // import * as ecc from "tiny-secp256k1";
 import * as ecc from "@bitcoinerlab/secp256k1";
-  
+
 bitcoin.initEccLib(ecc);
 
 class ItemProviderCheck implements MSign.ItemProvider {
@@ -34,11 +34,14 @@ function App(): JSX.Element {
   });
   const [network, setNetwork] = useState("livenet");
   const [testList, setTestList] = useState<MSign.IListingState>();
+  const [sellerSign, setSellerSign] = useState("");
+
   const [prepareDummyResult, setprepareDummyResult] = useState("");
   const [payResult, setPayResult] = useState("");
 
   // const [itemCheck, setItemCheck] = useState<MSign.ItemProvider>();
   var itemCheck = new ItemProviderCheck();
+  var itemList = {} as MSign.IListingState;
 
   const getBasicInfo = async () => {
     const unisat = (window as any).unisat;
@@ -56,7 +59,7 @@ function App(): JSX.Element {
   };
 
   const listInscription = async (inscription: any) => {
-    setTestList({
+    itemList = {
       seller: {
         makerFeeBp: 0,
         sellerOrdAddress: address,
@@ -66,10 +69,12 @@ function App(): JSX.Element {
         signedListingPSBTBase64: "",
         // tapInternalKey: publicKey,
       },
-    });
+    };
+
+    // setTestList(itemList as MSign.IListingState);
 
     const info = await MSign.SellerSigner.generateUnsignedListingPSBTBase64(
-      testList!
+      itemList
     );
 
     const psbt = bitcoin.Psbt.fromBase64(
@@ -81,7 +86,9 @@ function App(): JSX.Element {
 
     info.seller.signedListingPSBTBase64 =
       bitcoin.Psbt.fromHex(psbtResult).toBase64();
-    setTestList(info);
+    itemList = info;
+    setTestList(itemList);
+    setSellerSign(itemList.seller.signedListingPSBTBase64!);
   };
 
   const prepareBuyerDummyUtxo = async () => {
@@ -125,8 +132,8 @@ function App(): JSX.Element {
   const buyInscription = async () => {
     const addressUtxos = await MSign.getAddressUtxos(address);
     setPayResult("");
-    setTestList({
-      seller: testList?.seller!,
+    var buyItemList = {
+      seller: testList!.seller,
       buyer: {
         takerFeeBp: 0,
         buyerAddress: address,
@@ -139,7 +146,7 @@ function App(): JSX.Element {
         ))!,
         buyerPaymentUTXOs: (await MSign.BuyerSigner.selectPaymentUTXOs(
           addressUtxos,
-          testList?.seller.price!,
+          testList!.seller.price!,
           0,
           0,
           "",
@@ -149,10 +156,37 @@ function App(): JSX.Element {
         signedBuyingPSBTBase64: "",
         mergedSignedBuyingPSBTBase64: "",
       },
-    });
+    } as MSign.IListingState;
+    // itemList = buyItemList;
+
+    // setTestList({
+    //   seller: testList?.seller!,
+    //   buyer: {
+    //     takerFeeBp: 0,
+    //     buyerAddress: address,
+    //     buyerTokenReceiveAddress: address,
+    //     buyerPublicKey: publicKey,
+    //     feeRateTier: "fastestFee",
+    //     buyerDummyUTXOs: (await MSign.BuyerSigner.selectDummyUTXOs(
+    //       addressUtxos,
+    //       itemCheck
+    //     ))!,
+    //     buyerPaymentUTXOs: (await MSign.BuyerSigner.selectPaymentUTXOs(
+    //       addressUtxos,
+    //       testList?.seller.price!,
+    //       0,
+    //       0,
+    //       "",
+    //       itemCheck
+    //     ))!,
+    //     unsignedBuyingPSBTBase64: "",
+    //     signedBuyingPSBTBase64: "",
+    //     mergedSignedBuyingPSBTBase64: "",
+    //   },
+    // });
 
     const info = await MSign.BuyerSigner.generateUnsignedBuyingPSBTBase64(
-      testList!
+      buyItemList
     );
 
     const buyPsbt = info?.buyer?.unsignedBuyingPSBTBase64;
@@ -164,7 +198,8 @@ function App(): JSX.Element {
       const signedPsbt = bitcoin.Psbt.fromHex(psbtResult);
 
       info.buyer!.signedBuyingPSBTBase64 = signedPsbt.toBase64();
-      setTestList(info);
+      buyItemList = info;
+      setTestList(buyItemList);
 
       const mergedPsbtB64 = MSign.BuyerSigner.mergeSignedBuyingPSBTBase64(
         info.seller.signedListingPSBTBase64!,
@@ -218,7 +253,7 @@ function App(): JSX.Element {
       genesisTransaction: inscription.genesisTransaction,
       inscriptionNumber: inscription.inscriptionNumber,
       chain: "",
-      owner: "",
+      owner: inscription.address,
 
       location: inscription.location,
       outputValue: inscription.outputValue,
@@ -346,9 +381,7 @@ function App(): JSX.Element {
               </div>
               <div style={{ textAlign: "left", marginTop: 10 }}>
                 <div style={{ fontWeight: "bold" }}>Result:</div>
-                <div style={{ wordWrap: "break-word" }}>
-                  {testList?.seller.signedListingPSBTBase64}
-                </div>
+                <div style={{ wordWrap: "break-word" }}>{sellerSign}</div>
               </div>
             </Card>
 
