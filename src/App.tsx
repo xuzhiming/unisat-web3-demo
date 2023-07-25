@@ -66,6 +66,7 @@ function App(): JSX.Element {
   };
 
   const listInscription = async (inscription: any) => {
+    setSellerSign("");
     itemList = {
       seller: {
         makerFeeBp: 0,
