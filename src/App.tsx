@@ -15,18 +15,50 @@ const instance = axios.create({
   // headers: {'X-Custom-Header': 'foobar'}
 });
 
+var allInscriptions: any[] = [];
+
 class ItemProviderCheck implements MSign.ItemProvider {
   getTokenByOutput(output: string): Promise<MSign.IOrdItem | null> {
     // throw new Error("Method not implemented.");
-    const result = null;
-    return result!;
+    const result = allInscriptions.filter((info) => info.output === output);
+    var orderItem = null;
+    if (result.length === 1) {
+      orderItem = mapInscription2OrdItem(result[0]) as MSign.IOrdItem;
+    }
+    return orderItem as any;
   }
   getTokenById(tokenId: string): Promise<MSign.IOrdItem | null> {
     // throw new Error("Method not implemented.");
-    const result = null;
-    return result!;
+    const result = allInscriptions.filter(
+      (info) => info.inscriptionId === tokenId
+    );
+    var orderItem = null;
+    if (result.length === 1) {
+      orderItem = mapInscription2OrdItem(result[0]) as MSign.IOrdItem;
+    }
+    return orderItem as any;
   }
 }
+
+const mapInscription2OrdItem = (inscription: any) => {
+  return {
+    id: inscription.inscriptionId,
+    contentURI: inscription.content,
+    contentType: inscription.contentType,
+    contentPreviewURI: inscription.preview,
+    sat: inscription.inscriptionNumber,
+    satName: "",
+    genesisTransaction: inscription.genesisTransaction,
+    inscriptionNumber: inscription.inscriptionNumber,
+    chain: "",
+    owner: inscription.address,
+
+    location: inscription.location,
+    outputValue: inscription.outputValue,
+    output: inscription.output,
+    listed: false,
+  };
+};
 
 function App(): JSX.Element {
   const [unisatInstalled, setUnisatInstalled] = useState(false);
@@ -63,6 +95,9 @@ function App(): JSX.Element {
 
     const network = await unisat.getNetwork();
     setNetwork(network);
+
+    const result = await unisat.getInscriptions(0, Number.MAX_SAFE_INTEGER);
+    allInscriptions = result.list;
   };
 
   const listInscription = async (inscription: any) => {
@@ -253,26 +288,6 @@ function App(): JSX.Element {
   const handleNetworkChanged = (network: string) => {
     setNetwork(network);
     getBasicInfo();
-  };
-
-  const mapInscription2OrdItem = (inscription: any) => {
-    return {
-      id: inscription.inscriptionId,
-      contentURI: inscription.content,
-      contentType: inscription.contentType,
-      contentPreviewURI: inscription.preview,
-      sat: inscription.inscriptionNumber,
-      satName: "",
-      genesisTransaction: inscription.genesisTransaction,
-      inscriptionNumber: inscription.inscriptionNumber,
-      chain: "",
-      owner: inscription.address,
-
-      location: inscription.location,
-      outputValue: inscription.outputValue,
-      output: inscription.output,
-      listed: false,
-    };
   };
 
   useEffect(() => {
