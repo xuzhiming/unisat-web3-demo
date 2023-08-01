@@ -137,6 +137,9 @@ function App(): JSX.Element {
   const prepareBuyerDummyUtxo = async () => {
     // let ret = await instance.get("address/" + address + "/utxo");
 
+    const result = await unisat.getInscriptions(0, Number.MAX_SAFE_INTEGER);
+    allInscriptions = result.list;
+
     // setprepareDummyResult(JSON.stringify(ret.data));
 
     // return;
