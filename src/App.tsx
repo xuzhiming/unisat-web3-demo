@@ -6,6 +6,7 @@ import * as MSign from "msigner";
 // import * as ecc from "tiny-secp256k1";
 import * as ecc from "@bitcoinerlab/secp256k1";
 import axios from "axios";
+import Rune from "./rune";
 
 bitcoin.initEccLib(ecc);
 
@@ -16,6 +17,91 @@ const instance = axios.create({
 });
 
 var allInscriptions: any[] = [];
+
+/**
+ * @param {BigInt} x
+ * @returns {Buffer}
+ */
+function getInt64Bytes(x: bigint) {
+  const bytes = Buffer.alloc(8);
+  bytes.writeBigUInt64LE(x);
+  return bytes;
+}
+
+function encodeNumber(x: bigint) {
+  if (x < 252) {
+    return x.toString(16);
+    // return getInt64Bytes(x, 1).toString("hex");
+  } else if (x <= 0xff) {
+    return "fd" + getInt64Bytes(x).toString("hex").substring(0, 4);
+  } else if (x <= 0xffff) {
+    return "fe" + getInt64Bytes(x).toString("hex").substring(0, 8);
+  } else {
+    return "ff" + getInt64Bytes(x).toString("hex");
+  }
+}
+
+/**
+   PrefixVarint
+   Similar rust implementation at: https://github.com/otake84/dlhn/blob/22ce82ab3740328ff7041b63f77ee70020605b1c/dlhn/src/prefix_varint.rs#L5
+*/
+
+const PREFIX_VARINT_BUF_SIZE = 11;
+
+function countLeadingZeros(input: string) {
+  let splitted = input.split("");
+  let count = 0;
+  for (let i = 0; i < splitted.length; i++) {
+    if (+splitted[i] !== 0) {
+      break;
+    }
+    count++;
+  }
+  return count;
+}
+
+function encodePrefixVarint(value: bigint, buf: Buffer): number {
+  const leadingZeros = countLeadingZeros(value.toString(2).padStart(64, "0"));
+  let bytesRequired: number = 1;
+
+  // Define the thresholds for leading zeros to determine bytes required
+  const thresholds = [7, 14, 21, 28, 35, 42, 49, 56];
+  for (let i = 0; i < thresholds.length; i++) {
+    if (leadingZeros <= thresholds[i]) {
+      bytesRequired = PREFIX_VARINT_BUF_SIZE - i;
+      break;
+    }
+  }
+
+  switch (bytesRequired) {
+    case 9:
+      buf[0] = 255;
+      buf.writeBigUInt64LE(value, 1);
+      return bytesRequired;
+
+    case 8:
+      buf[0] = 254;
+      for (let i = 1; i <= 7; i++) {
+        buf[i] = Number((value >> BigInt(8 * (i - 1))) & BigInt(0xff));
+      }
+      return bytesRequired;
+
+    case 1:
+      buf[0] = Number(value & BigInt(0xff));
+      return bytesRequired;
+
+    default:
+      const prefixMask = 256 - (1 << (PREFIX_VARINT_BUF_SIZE - bytesRequired));
+      value <<= BigInt(bytesRequired);
+      buf[0] = Number(
+        ((value & BigInt(0xff)) >> BigInt(bytesRequired)) | BigInt(prefixMask)
+      );
+      for (let i = 1; i < bytesRequired; i++) {
+        buf[i] = Number((value >> BigInt(8 * i)) & BigInt(0xff));
+      }
+      return bytesRequired;
+  }
+}
 
 class ItemProviderCheck implements MSign.ItemProvider {
   getTokenByOutput(output: string): Promise<MSign.IOrdItem | null> {
@@ -77,6 +163,10 @@ function App(): JSX.Element {
 
   const [prepareDummyResult, setprepareDummyResult] = useState("");
   const [payResult, setPayResult] = useState("");
+  const [runeRsl, setRuneRsl] = useState("");
+  const [runeName, setRuneName] = useState("");
+  const [runeDecimal, setDecimal] = useState("18");
+  const [runeAmount, setRuneAmount] = useState("0");
 
   // const [itemCheck, setItemCheck] = useState<MSign.ItemProvider>();
   var itemCheck = new ItemProviderCheck();
@@ -190,7 +280,7 @@ function App(): JSX.Element {
         buyerAddress: address,
         buyerTokenReceiveAddress: address,
         buyerPublicKey: publicKey,
-        feeRateTier: "fastestFee",
+        feeRate: 1,
         buyerDummyUTXOs: (await MSign.BuyerSigner.selectDummyUTXOs(
           addressUtxos,
           itemCheck
@@ -208,33 +298,6 @@ function App(): JSX.Element {
         mergedSignedBuyingPSBTBase64: "",
       },
     } as MSign.IListingState;
-    // itemList = buyItemList;
-
-    // setTestList({
-    //   seller: testList?.seller!,
-    //   buyer: {
-    //     takerFeeBp: 0,
-    //     buyerAddress: address,
-    //     buyerTokenReceiveAddress: address,
-    //     buyerPublicKey: publicKey,
-    //     feeRateTier: "fastestFee",
-    //     buyerDummyUTXOs: (await MSign.BuyerSigner.selectDummyUTXOs(
-    //       addressUtxos,
-    //       itemCheck
-    //     ))!,
-    //     buyerPaymentUTXOs: (await MSign.BuyerSigner.selectPaymentUTXOs(
-    //       addressUtxos,
-    //       testList?.seller.price!,
-    //       0,
-    //       0,
-    //       "",
-    //       itemCheck
-    //     ))!,
-    //     unsignedBuyingPSBTBase64: "",
-    //     signedBuyingPSBTBase64: "",
-    //     mergedSignedBuyingPSBTBase64: "",
-    //   },
-    // });
 
     const info = await MSign.BuyerSigner.generateUnsignedBuyingPSBTBase64(
       buyItemList
@@ -291,6 +354,92 @@ function App(): JSX.Element {
   const handleNetworkChanged = (network: string) => {
     setNetwork(network);
     getBasicInfo();
+  };
+
+  const runeIssuance = async () => {
+    const result = await unisat.getInscriptions(0, Number.MAX_SAFE_INTEGER);
+    allInscriptions = result.list;
+
+    setRuneRsl("");
+    const addressUtxos = await MSign.getAddressUtxos(address);
+    const buyerPaymentUTXOs = await MSign.BuyerSigner.selectPaymentUTXOs(
+      addressUtxos,
+      500,
+      0,
+      0,
+      "",
+      itemCheck
+    );
+
+    const psbt = new bitcoin.Psbt({ network: bitcoin.networks.testnet });
+
+    let inputTotal = 0;
+    for (const utxo of buyerPaymentUTXOs) {
+      const input: any = {
+        hash: utxo.txid,
+        index: utxo.vout,
+        nonWitnessUtxo: utxo.tx.toBuffer(),
+      };
+
+      input.witnessUtxo = utxo.tx.outs[utxo.vout];
+
+      psbt.addInput({
+        ...input,
+      });
+      inputTotal += utxo.value;
+    }
+
+    // let runeOutput: Buffer = Buffer.from("", "hex");
+    let transferNumber = 210000000000;
+    // let hexstr = BigInt(transferNumber).toString(16);
+    // let testBigint = BigInt("0x" + hexstr);
+    // let prefixLen = hexstr.length.toString(16);
+    let transferAmount = encodeNumber(BigInt(runeAmount));
+
+    let test1 = encodeNumber(BigInt(0x64));
+    let test2 = encodeNumber(BigInt(0xfc));
+
+    let test3 = encodeNumber(BigInt(0xff10));
+    let test4 = encodeNumber(BigInt(0x123456));
+    let test5 = encodeNumber(BigInt(10_000_000_000_000_000_000));
+
+    // const rune = new Rune(648);
+    // let name = rune.name;
+    // let runeName = "TEST";
+    let rune = Rune.fromName(runeName);
+    let runeEncode = encodeNumber(BigInt(rune.value));
+    let decimal = 20;
+    let decimalEncode = encodeNumber(BigInt(runeDecimal));
+
+    let runeOutput = bitcoin.script.fromASM(
+      `
+      OP_RETURN ${"R".charCodeAt(0).toString(16)}
+      0001${transferAmount}
+      ${runeEncode}${decimalEncode}
+      `
+        .trim()
+        .replace(/\s+/g, " ")
+    );
+
+    psbt.addOutput({
+      script: Buffer.from(runeOutput.toString("hex"), "hex"),
+      value: 0,
+    });
+
+    psbt.addOutput({
+      address: address,
+      value: inputTotal - 146,
+    });
+
+    const psbtResult = await unisat.signPsbt(psbt.toHex(), {
+      autoFinalized: false,
+    });
+    const signedPsbt = bitcoin.Psbt.fromHex(psbtResult);
+
+    signedPsbt.finalizeAllInputs();
+
+    const presult = await unisat.pushPsbt(signedPsbt.toHex());
+    setRuneRsl(presult + ":" + signedPsbt.toHex());
   };
 
   useEffect(() => {
@@ -455,6 +604,48 @@ function App(): JSX.Element {
               <div style={{ textAlign: "left", marginTop: 10 }}>
                 <div style={{ fontWeight: "bold" }}>Result:</div>
                 <div style={{ wordWrap: "break-word" }}>{payResult}</div>
+              </div>
+            </Card>
+
+            <Card
+              size="small"
+              title="RUNE Issuance"
+              style={{ width: 300, margin: 10 }}
+            >
+              <div style={{ fontWeight: "bold" }}>RuneName:</div>
+              <Input
+                defaultValue={runeName}
+                onChange={(e) => {
+                  setRuneName(e.target.value);
+                }}
+              ></Input>
+              <div style={{ fontWeight: "bold" }}>RuneAmount:</div>
+              <Input
+                defaultValue={runeAmount}
+                onChange={(e) => {
+                  setRuneAmount(e.target.value);
+                }}
+              ></Input>
+              <div style={{ fontWeight: "bold" }}>RuneDecimal:</div>
+              <Input
+                defaultValue={runeDecimal}
+                onChange={(e) => {
+                  setDecimal(e.target.value);
+                }}
+              ></Input>
+
+              <div>
+                <Button
+                  onClick={async () => {
+                    const result = await runeIssuance();
+                  }}
+                >
+                  RUNE Issuance
+                </Button>
+              </div>
+              <div style={{ textAlign: "left", marginTop: 10 }}>
+                <div style={{ fontWeight: "bold" }}>Result:</div>
+                <div style={{ wordWrap: "break-word" }}>{runeRsl}</div>
               </div>
             </Card>
 

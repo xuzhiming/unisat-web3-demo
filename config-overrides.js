@@ -35,7 +35,5 @@ module.exports = function override(config, env) {
   console.log(config.resolve)
   console.log(config.plugins)
 
-  process.env.BTC_NETWORK = "testnet"
-
   return config
 }
