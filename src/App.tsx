@@ -167,6 +167,8 @@ function App(): JSX.Element {
   const [runeName, setRuneName] = useState("");
   const [runeDecimal, setDecimal] = useState("18");
   const [runeAmount, setRuneAmount] = useState("0");
+  const [firstInscription, setFirstInscription] = useState();
+  const [sellerAddress, setSellerAddress] = useState("");
 
   // const [itemCheck, setItemCheck] = useState<MSign.ItemProvider>();
   var itemCheck = new ItemProviderCheck();
@@ -190,11 +192,130 @@ function App(): JSX.Element {
     allInscriptions = result.list;
   };
 
+  const acceptBidder = async () => {
+    itemList = {
+      isBidder: true,
+      seller: {
+        makerFeeBp: 0,
+        makerAddress: "",
+        sellerOrdAddress: address,
+        price: 1500,
+        ordItem: mapInscription2OrdItem(firstInscription),
+        sellerReceiveAddress: address,
+        signedListingPSBTBase64: "",
+        // tapInternalKey: publicKey,
+      },
+      buyer: testList?.buyer,
+    };
+
+    // setTestList(itemList as MSign.IListingState);
+
+    const info = await MSign.SellerSigner.generateUnsignedListingPSBTBase64(
+      itemList
+    );
+
+    const psbt = bitcoin.Psbt.fromBase64(
+      info.seller.unsignedListingPSBTBase64!
+    );
+    const psbtResult = await unisat.signPsbt(psbt.toHex(), {
+      autoFinalized: false,
+    });
+
+    itemList.seller.signedListingPSBTBase64 =
+      bitcoin.Psbt.fromHex(psbtResult).toBase64();
+
+    const mergedPsbtB64 = MSign.BuyerSigner.mergeSignedBuyingPSBTBase64(
+      itemList.seller.signedListingPSBTBase64!,
+      itemList.buyer?.signedBuyingPSBTBase64!
+    );
+    const psbtFinal = bitcoin.Psbt.fromBase64(mergedPsbtB64);
+    psbtFinal.finalizeAllInputs();
+
+    const presult = await unisat.pushPsbt(psbtFinal.toHex());
+    setSellerSign(presult + ":" + psbtFinal.toHex());
+  };
+
+  const offerBidder = async () => {
+    const addressUtxos = await MSign.getAddressUtxos(address);
+    setPayResult("");
+    var buyItemList = {
+      isBidder: true,
+      seller: {
+        makerFeeBp: 0,
+        makerAddress: "",
+        sellerOrdAddress: sellerAddress,
+        price: 1500,
+        ordItem: mapInscription2OrdItem(firstInscription),
+        sellerReceiveAddress: sellerAddress,
+        signedListingPSBTBase64: "",
+        // tapInternalKey: publicKey,
+      },
+      buyer: {
+        takerFeeBp: 0,
+        buyerAddress: address,
+        buyerTokenReceiveAddress: address,
+        buyerPublicKey: publicKey,
+        feeRate: 1,
+        buyerDummyUTXOs: (await MSign.BuyerSigner.selectDummyUTXOs(
+          addressUtxos,
+          itemCheck
+        ))!,
+        buyerPaymentUTXOs: (await MSign.BuyerSigner.selectPaymentUTXOs(
+          addressUtxos,
+          1500,
+          0,
+          0,
+          "",
+          itemCheck
+        ))!,
+        unsignedBuyingPSBTBase64: "",
+        signedBuyingPSBTBase64: "",
+        mergedSignedBuyingPSBTBase64: "",
+        platAddress:
+          "tb1pdp7mtndgr0pkawtma44m5m6t9lzte5sl56hl0jxf2jfdhqs6cttqvhzrru",
+        platFee: 100,
+      },
+    } as MSign.IListingState;
+
+    const info = await MSign.BuyerSigner.generateUnsignedBuyingPSBTBase64(
+      buyItemList
+    );
+
+    const buyPsbt = info?.buyer?.unsignedBuyingPSBTBase64;
+    const psbt = bitcoin.Psbt.fromBase64(buyPsbt!);
+    try {
+      const psbtResult = await unisat.signPsbt(psbt.toHex(), {
+        autoFinalized: false,
+      });
+      const signedPsbt = bitcoin.Psbt.fromHex(psbtResult);
+
+      info.buyer!.signedBuyingPSBTBase64 = signedPsbt.toBase64();
+      buyItemList = info;
+      setTestList(buyItemList);
+
+      // const mergedPsbtB64 = MSign.BuyerSigner.mergeSignedBuyingPSBTBase64(
+      //   info.seller.signedListingPSBTBase64!,
+      //   info.buyer?.signedBuyingPSBTBase64!
+      // );
+      // const psbtFinal = bitcoin.Psbt.fromBase64(mergedPsbtB64);
+      // psbtFinal.finalizeAllInputs();
+
+      // const presult = await unisat.pushPsbt(psbtFinal.toHex());
+      // setPayResult(presult + ":" + psbtFinal.toHex());
+      setPayResult(info.buyer!.signedBuyingPSBTBase64);
+    } catch (e) {
+      setPayResult((e as any).message);
+    }
+  };
+
   const listInscription = async (inscription: any) => {
+    setFirstInscription(inscription);
+    setSellerAddress(address);
     setSellerSign("");
     itemList = {
       seller: {
         makerFeeBp: 0,
+        makerAddress: "",
         sellerOrdAddress: address,
         price: 1500,
         ordItem: mapInscription2OrdItem(inscription),
@@ -296,6 +417,9 @@ function App(): JSX.Element {
         unsignedBuyingPSBTBase64: "",
         signedBuyingPSBTBase64: "",
         mergedSignedBuyingPSBTBase64: "",
+        platAddress:
+          "tb1pdp7mtndgr0pkawtma44m5m6t9lzte5sl56hl0jxf2jfdhqs6cttqvhzrru",
+        platFee: 100,
       },
     } as MSign.IListingState;
 
@@ -558,6 +682,14 @@ function App(): JSX.Element {
                 >
                   Fetch And Sell First Inscription
                 </Button>
+
+                <Button
+                  onClick={async () => {
+                    const result = await acceptBidder();
+                  }}
+                >
+                  Accept Bidder
+                </Button>
               </div>
               <div style={{ textAlign: "left", marginTop: 10 }}>
                 <div style={{ fontWeight: "bold" }}>Result:</div>
@@ -599,6 +731,14 @@ function App(): JSX.Element {
                   }}
                 >
                   Buyer Pay
+                </Button>
+
+                <Button
+                  onClick={async () => {
+                    const result = await offerBidder();
+                  }}
+                >
+                  Offer Bidder
                 </Button>
               </div>
               <div style={{ textAlign: "left", marginTop: 10 }}>
