@@ -13,6 +13,7 @@ module.exports = function override(config, env) {
     buffer: require.resolve("buffer"),
     tls: require.resolve("tls"),
     fs: false,
+    net: false,
   }
 
   config.resolve.extensions = [...config.resolve.extensions, ".ts", ".js"]
@@ -30,6 +31,7 @@ module.exports = function override(config, env) {
       process: "process/browser",
     }),
   ]
+
   // config.target = "node"
 
   console.log(config.resolve)

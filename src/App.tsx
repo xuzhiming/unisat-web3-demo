@@ -6,7 +6,8 @@ import * as MSign from "msigner";
 // import * as ecc from "tiny-secp256k1";
 import * as ecc from "@bitcoinerlab/secp256k1";
 import axios from "axios";
-import Rune from "./rune";
+// import { Rune }  from "./rune";
+import { Rune, Runestone, RuneId } from "runelib";
 
 bitcoin.initEccLib(ecc);
 
@@ -169,6 +170,12 @@ function App(): JSX.Element {
   const [runeAmount, setRuneAmount] = useState("0");
   const [firstInscription, setFirstInscription] = useState();
   const [sellerAddress, setSellerAddress] = useState("");
+  const [buyPsbtFinalHex, setBuyPsbtFinalHex] = useState("");
+  const [serverTxid, setServerTxid] = useState("");
+  const [serverRawTx, setServerRawTx] = useState("");
+  const [toAddress, setToAddress] = useState(
+    "tb1px5mrmfq22jjp9jaerd77wue8nx2wwnjltlcqkvlhezs9rvgndcnq5vkh2t"
+  );
 
   // const [itemCheck, setItemCheck] = useState<MSign.ItemProvider>();
   var itemCheck = new ItemProviderCheck();
@@ -206,6 +213,7 @@ function App(): JSX.Element {
         // tapInternalKey: publicKey,
       },
       buyer: testList?.buyer,
+      buyerTx: serverRawTx,
     };
 
     // setTestList(itemList as MSign.IListingState);
@@ -231,22 +239,33 @@ function App(): JSX.Element {
     const psbtFinal = bitcoin.Psbt.fromBase64(mergedPsbtB64);
     psbtFinal.finalizeAllInputs();
 
+    const bresult = await unisat.pushPsbt(buyPsbtFinalHex);
+
     const presult = await unisat.pushPsbt(psbtFinal.toHex());
-    setSellerSign(presult + ":" + psbtFinal.toHex());
+    setSellerSign(
+      "bresult: " + bresult + "\n" + presult + ":" + psbtFinal.toHex()
+    );
   };
 
   const offerBidder = async () => {
     const addressUtxos = await MSign.getAddressUtxos(address);
     setPayResult("");
+    const buyerDummyUTXOs = await MSign.BuyerSigner.selectDummyUTXOs(
+      addressUtxos,
+      itemCheck
+    );
     var buyItemList = {
       isBidder: true,
+      buyerTx: serverRawTx,
       seller: {
         makerFeeBp: 0,
         makerAddress: "",
-        sellerOrdAddress: sellerAddress,
+        chargeFeeBp: 0,
+        chargeAddress: "",
+        sellerOrdAddress: sellerAddress, //server address
         price: 1500,
         ordItem: mapInscription2OrdItem(firstInscription),
-        sellerReceiveAddress: sellerAddress,
+        sellerReceiveAddress: sellerAddress, //TODO: use owner address
         signedListingPSBTBase64: "",
         // tapInternalKey: publicKey,
       },
@@ -255,25 +274,23 @@ function App(): JSX.Element {
         buyerAddress: address,
         buyerTokenReceiveAddress: address,
         buyerPublicKey: publicKey,
-        feeRate: 1,
-        buyerDummyUTXOs: (await MSign.BuyerSigner.selectDummyUTXOs(
-          addressUtxos,
-          itemCheck
-        ))!,
+        feeRate: 100,
+        buyerDummyUTXOs: buyerDummyUTXOs!,
         buyerPaymentUTXOs: (await MSign.BuyerSigner.selectPaymentUTXOs(
           addressUtxos,
           1500,
+          3,
+          7,
+          "hourFee",
           0,
+          itemCheck,
           0,
-          "",
-          itemCheck
+          buyerDummyUTXOs!
         ))!,
         unsignedBuyingPSBTBase64: "",
         signedBuyingPSBTBase64: "",
         mergedSignedBuyingPSBTBase64: "",
-        platAddress:
-          "tb1pdp7mtndgr0pkawtma44m5m6t9lzte5sl56hl0jxf2jfdhqs6cttqvhzrru",
-        platFee: 100,
+        platFee: 0,
       },
     } as MSign.IListingState;
 
@@ -372,6 +389,7 @@ function App(): JSX.Element {
         publicKey,
         addressUtxos,
         "fastestFee",
+        0,
         itemCheck!
       );
 
@@ -391,9 +409,49 @@ function App(): JSX.Element {
     }
   };
 
+  const sendInscriptionOnly = async (toAddress: string) => {
+    const result = await unisat.getInscriptions();
+    // setInscription(result.list[0]);
+    const inscription = result.list[0];
+
+    const psbt = await MSign.BuyerSigner.sendInscription(
+      mapInscription2OrdItem(inscription),
+      address,
+      publicKey,
+      toAddress,
+      itemCheck
+    );
+
+    const psbtResult = await unisat.signPsbt(psbt.toHex(), {
+      autoFinalized: true,
+    });
+    const signedPsbt = bitcoin.Psbt.fromHex(psbtResult);
+
+    const presult = await (window as any).unisat.pushPsbt(psbtResult);
+
+    setBuyPsbtFinalHex(psbtResult);
+
+    const finalTx = signedPsbt.extractTransaction();
+
+    const txid = finalTx.getId();
+    setServerTxid(txid);
+    setServerRawTx(finalTx.toHex());
+
+    // const bidderInscription = firstInscription! as any;
+    inscription.output = txid + ":0";
+    setFirstInscription(inscription);
+    setSellerAddress(toAddress);
+    return finalTx.toHex();
+  };
+
   const buyInscription = async () => {
     const addressUtxos = await MSign.getAddressUtxos(address);
     setPayResult("");
+    const buyerDummyUTXOs = await MSign.BuyerSigner.selectDummyUTXOs(
+      addressUtxos,
+      itemCheck
+    )!;
+
     var buyItemList = {
       seller: testList!.seller,
       buyer: {
@@ -401,25 +459,25 @@ function App(): JSX.Element {
         buyerAddress: address,
         buyerTokenReceiveAddress: address,
         buyerPublicKey: publicKey,
-        feeRate: 1,
-        buyerDummyUTXOs: (await MSign.BuyerSigner.selectDummyUTXOs(
-          addressUtxos,
-          itemCheck
-        ))!,
+        feeRate: 100,
+        buyerDummyUTXOs: buyerDummyUTXOs,
         buyerPaymentUTXOs: (await MSign.BuyerSigner.selectPaymentUTXOs(
           addressUtxos,
           testList!.seller.price!,
+          3,
+          5,
+          "fastestFee",
           0,
+          itemCheck,
           0,
-          "",
-          itemCheck
+          buyerDummyUTXOs!
         ))!,
         unsignedBuyingPSBTBase64: "",
         signedBuyingPSBTBase64: "",
         mergedSignedBuyingPSBTBase64: "",
         platAddress:
           "tb1pdp7mtndgr0pkawtma44m5m6t9lzte5sl56hl0jxf2jfdhqs6cttqvhzrru",
-        platFee: 100,
+        platFee: 0,
       },
     } as MSign.IListingState;
 
@@ -436,8 +494,6 @@ function App(): JSX.Element {
       const signedPsbt = bitcoin.Psbt.fromHex(psbtResult);
 
       info.buyer!.signedBuyingPSBTBase64 = signedPsbt.toBase64();
-      buyItemList = info;
-      setTestList(buyItemList);
 
       const mergedPsbtB64 = MSign.BuyerSigner.mergeSignedBuyingPSBTBase64(
         info.seller.signedListingPSBTBase64!,
@@ -445,9 +501,22 @@ function App(): JSX.Element {
       );
       const psbtFinal = bitcoin.Psbt.fromBase64(mergedPsbtB64);
       psbtFinal.finalizeAllInputs();
+      const finalTx = psbtFinal.extractTransaction();
+      const rawtx = finalTx.toHex();
+      const txid = finalTx.getId();
+      setPayResult("finalTx: " + rawtx + "\nTxid: " + txid);
+      setBuyPsbtFinalHex(psbtFinal.toHex());
+      // const presult = await unisat.pushPsbt(psbtFinal.toHex());
+      // setPayResult(presult + ":" + psbtFinal.toHex());
 
-      const presult = await unisat.pushPsbt(psbtFinal.toHex());
-      setPayResult(presult + ":" + psbtFinal.toHex());
+      info.buyerTx = rawtx;
+      buyItemList = info;
+      setTestList(buyItemList);
+
+      const bidderInscription = firstInscription! as any;
+      bidderInscription.output = txid + ":1";
+      setFirstInscription(bidderInscription);
+      setSellerAddress(address);
     } catch (e) {
       setPayResult((e as any).message);
     }
@@ -492,6 +561,7 @@ function App(): JSX.Element {
       0,
       0,
       "",
+      0,
       itemCheck
     );
 
@@ -665,7 +735,44 @@ function App(): JSX.Element {
                 </Radio.Group>
               </div>
             </Card>
+            <TestRunes></TestRunes>
             <LastInscription></LastInscription>
+
+            <Card
+              size="small"
+              title="Send First Inscription"
+              style={{ width: 300, margin: 10 }}
+            >
+              <div style={{ textAlign: "left", marginTop: 10 }}>
+                <div style={{ fontWeight: "bold" }}>Receiver Address:</div>
+                <Input
+                  defaultValue={toAddress}
+                  onChange={(e) => {
+                    setToAddress(e.target.value);
+                  }}
+                ></Input>
+              </div>
+
+              <div style={{ textAlign: "left", marginTop: 10 }}>
+                <div style={{ fontWeight: "bold" }}>sendTxHex:</div>
+                <div style={{ wordWrap: "break-word" }}>{serverTxid}</div>
+                <div style={{ wordWrap: "break-word" }}>{serverRawTx}</div>
+              </div>
+              <Button
+                style={{ marginTop: 10 }}
+                onClick={async () => {
+                  try {
+                    const txhex = await sendInscriptionOnly(toAddress);
+                    setServerRawTx(txhex);
+                  } catch (e) {
+                    setServerRawTx((e as any).message);
+                  }
+                }}
+              >
+                SendFirstInscription
+              </Button>
+            </Card>
+
             <Card
               size="small"
               title="Sell First Inscription"
@@ -677,7 +784,7 @@ function App(): JSX.Element {
                     const result = await (
                       window as any
                     ).unisat.getInscriptions();
-                    listInscription(result.list[0]);
+                    listInscription(result.list[result.list.length - 5]);
                   }}
                 >
                   Fetch And Sell First Inscription
@@ -745,6 +852,36 @@ function App(): JSX.Element {
                 <div style={{ fontWeight: "bold" }}>Result:</div>
                 <div style={{ wordWrap: "break-word" }}>{payResult}</div>
               </div>
+              <div style={{ fontWeight: "bold" }}>serverSellerAddress:</div>
+              <Input
+                defaultValue={sellerAddress}
+                onChange={(e) => {
+                  setSellerAddress(e.target.value);
+                }}
+              ></Input>
+              <div style={{ fontWeight: "bold" }}>serverTxId:</div>
+              <Input
+                defaultValue={serverTxid}
+                onChange={(e) => {
+                  const newvalue = e.target.value;
+                  setServerTxid(newvalue);
+                  // setRuneAmount(e.target.value);
+                  const bidderInscription = firstInscription! as any;
+                  bidderInscription.output = newvalue + ":1";
+                  setFirstInscription(bidderInscription);
+                }}
+              ></Input>
+              <div style={{ fontWeight: "bold" }}>serverRawTx:</div>
+              <Input
+                defaultValue={serverRawTx}
+                onChange={(e) => {
+                  const newvalue = e.target.value;
+                  setServerRawTx(newvalue);
+                  let info = testList;
+                  info!.buyerTx = newvalue;
+                  setTestList(info);
+                }}
+              ></Input>
             </Card>
 
             <Card
@@ -827,7 +964,7 @@ function LastInscription() {
         <Button
           onClick={async () => {
             const result = await (window as any).unisat.getInscriptions();
-            setInscription(result.list);
+            setInscription(result.list[0]);
           }}
         >
           Fetch Inscriptions
@@ -842,6 +979,46 @@ function LastInscription() {
     </Card>
   );
 }
+
+function TestRunes() {
+  const [inscription, setInscription] = useState("");
+  return (
+    <Card size="small" title="Test Runes" style={{ width: 300, margin: 10 }}>
+      <div>
+        <Button
+          onClick={() => {
+            // const result = await (window as any).unisat.getInscriptions();
+            // setInscription(result.list);
+            const mintRawTx =
+              "020000000001015257d0b6f99708c175fce7c7054abae25412b65fc2981f4b0cd9868667c325660100000000ffffffff02401f000000000000225120b51cecf6a2bbe2b9c3dd921cb4e86b5563186d8aa41bf2c934d114cd75c59136e7b001000000000022512061e50445d84536d09e2f5916d6c541cd2eb7ab38235152931979e179def117da01402bdc4e72c0c19e5a0a30be2528b8b39111297815840effc9b708a63238577ae26a77dd5d68e5fee8abf845bd3904009d46724021cc67c6735ded840638df145700000000";
+            // "020000000001015257d0b6f99708c175fce7c7054abae25412b65fc2981f4b0cd9868667c325660000000000fdffffff0300000000000000000c6a5d09148dde9d0114271601220200000000000022512061e50445d84536d09e2f5916d6c541cd2eb7ab38235152931979e179def117daca0700000000000016001439843f8f4d1defa421cd407d57e64128c1ff5cde0340a62d61ffc27293352022857eff2f1513551a0d04fbdb63ebad814e5b01a5f317d2009ee692d2a21812a85a2abc1df19470bd0c3fae485655ebadd8966ef57dda26203c2072852c0c03de604716b8a423277c4ee908fb6dbc65ce900324809a89bb4dac0063006821c0e895f7ca954b7e72986377a72d7a7be735d2a14e4c670051fe56a02b37b6379700000000";
+
+            const stone = Runestone.decipher(mintRawTx).value();
+            if (stone instanceof Runestone) {
+              setInscription("is Rune");
+              const runeMint = stone.mint.value();
+              if (runeMint != null) {
+                setInscription(runeMint.block + ":" + runeMint.idx);
+              }
+            }
+
+            // setInscription(stone);
+          }}
+        >
+          Test Runes
+        </Button>
+      </div>
+      <div style={{ textAlign: "left", marginTop: 10 }}>
+        <div style={{ fontWeight: "bold" }}>Result:</div>
+        <div style={{ wordWrap: "break-word" }}>
+          {/* {JSON.stringify(inscription)} */}
+          {inscription}
+        </div>
+      </div>
+    </Card>
+  );
+}
+
 function toPsbtNetwork(networkType: number) {
   if (networkType === 0) {
     return bitcoin.networks.bitcoin;
@@ -1354,7 +1531,7 @@ function PushPsbtCard() {
 
 function SendInscription() {
   const [toAddress, setToAddress] = useState(
-    "tb1p9fs8wmzalllma2vzn3swspeungjz8w5s55kwf75tva77ltpkx4aqgkrm3g"
+    "tb1prnjsszvr8lxjqpeyaa64697v32g5km28xy2kmk67ztjy3paznpzsnv07c6"
   );
   const [inscriptionId, setInscriptionId] = useState("");
   const [txid, setTxid] = useState("");
