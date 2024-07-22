@@ -258,14 +258,14 @@ function App(): JSX.Element {
       isBidder: true,
       buyerTx: serverRawTx,
       seller: {
-        makerFeeBp: 0,
-        makerAddress: "",
-        chargeFeeBp: 0,
-        chargeAddress: "",
+        makerFeeBp: 5,
+        makerAddress: "tb1pqs7a95hrypm6yazfpjajk524hhwnd9xagwuf4r06hd66qzynxwtsdl76n3",
+        chargeFeeBp: 4,
+        chargeAddress: "tb1pqs7a95hrypm6yazfpjajk524hhwnd9xagwuf4r06hd66qzynxwtsdl76n3",
         sellerOrdAddress: sellerAddress, //server address
-        price: 1500,
+        price: 11000,
         ordItem: mapInscription2OrdItem(firstInscription),
-        sellerReceiveAddress: sellerAddress, //TODO: use owner address
+        sellerReceiveAddress: "tb1pqs7a95hrypm6yazfpjajk524hhwnd9xagwuf4r06hd66qzynxwtsdl76n3", //TODO: use owner address
         signedListingPSBTBase64: "",
         // tapInternalKey: publicKey,
       },
@@ -278,7 +278,7 @@ function App(): JSX.Element {
         buyerDummyUTXOs: buyerDummyUTXOs!,
         buyerPaymentUTXOs: (await MSign.BuyerSigner.selectPaymentUTXOs(
           addressUtxos,
-          1500,
+          11000,
           3,
           7,
           "hourFee",
@@ -427,7 +427,7 @@ function App(): JSX.Element {
     });
     const signedPsbt = bitcoin.Psbt.fromHex(psbtResult);
 
-    const presult = await (window as any).unisat.pushPsbt(psbtResult);
+    // const presult = await (window as any).unisat.pushPsbt(psbtResult);
 
     setBuyPsbtFinalHex(psbtResult);
 
